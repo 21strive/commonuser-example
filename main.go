@@ -1,21 +1,35 @@
 package main
 
 import (
-  "fmt"
+	"github.com/21strive/commonuser"
+	"github.com/gofiber/fiber/v2"
 )
 
-//TIP <p>To run your code, right-click the code and select <b>Run</b>.</p> <p>Alternatively, click
-// the <icon src="AllIcons.Actions.Execute"/> icon in the gutter and select the <b>Run</b> menu item from here.</p>
-
 func main() {
-  //TIP <p>Press <shortcut actionId="ShowIntentionActions"/> when your caret is at the underlined text
-  // to see how GoLand suggests fixing the warning.</p><p>Alternatively, if available, click the lightbulb to view possible fixes.</p>
-  s := "gopher"
-  fmt.Printf("Hello and welcome, %s!\n", s)
+	commonuser := commonuser.New()
+	httpHandler := NewHTTPHandler(commonuser)
 
-  for i := 1; i <= 5; i++ {
-	//TIP <p>To start your debugging session, right-click your code in the editor and select the Debug option.</p> <p>We have set one <icon src="AllIcons.Debugger.Db_set_breakpoint"/> breakpoint
-	// for you, but you can always add more by pressing <shortcut actionId="ToggleLineBreakpoint"/>.</p>
-	fmt.Println("i =", 100/i)
-  }
+	app := fiber.New()
+
+	app.Post("/register", httpHandler.Registration)
+	app.Post("/register/verify", httpHandler.VerifyRegistration)
+	app.Post("/auth/username", httpHandler.AuthWithUsername)
+	app.Post("/auth/email", httpHandler.AuthWithEmail)
+	app.Patch("/account", httpHandler.UpdateAccount)
+	app.Patch("/refresh", httpHandler.Refresh)
+	app.Post("/email/update", httpHandler.UpdateEmail)
+	app.Post("/email/update/validate", httpHandler.ValidateEmailUpdate)
+	app.Post("/email/update/resend", httpHandler.ResendEmailUpdate)
+	app.Post("/email/update/revoke", httpHandler.RevokeEmailUpdate)
+	app.Post("/password/update", httpHandler.UpdatePassword)
+	app.Post("/password/forgot", httpHandler.ForgotPassword)
+	app.Post("/password/reset", httpHandler.ResetPassword)
+
+	// Getter
+	app.Get("/user", httpHandler.GetUser)
+
+	err := app.Listen(":3000")
+	if err != nil {
+		panic(err)
+	}
 }
