@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/21strive/commonuser"
 	"github.com/gofiber/fiber/v2"
+	_ "github.com/lib/pq"
 )
 
 func main() {
