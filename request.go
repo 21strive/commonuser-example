@@ -1,5 +1,7 @@
 package main
 
+import "github.com/21strive/commonuser"
+
 type NativeRegister struct {
 	Name     string `json:"name"`
 	Username string `json:"username"`
@@ -8,31 +10,29 @@ type NativeRegister struct {
 	Avatar   string `json:"avatar"`
 }
 type VerifyRegistration struct {
-	AccountUUID      string `json:"accountUUID"`
 	VerificationCode string `json:"verificationCode"`
 }
 
 type LoginWithEmail struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	commonuser.DeviceInfo
 }
 
 type LoginWithUsername struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	commonuser.DeviceInfo
 }
 
 type UpdateAccount struct {
-	AccountUUID string `json:"accountUUID"`
-	Name        string `json:"name"`
-	Username    string `json:"username"`
-	Email       string `json:"email"`
-	Avatar      string `json:"avatar"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+	Avatar   string `json:"avatar"`
 }
 
 type UpdateEmail struct {
-	AccountUUID string `json:"accountUUID"`
-	NewEmail    string `json:"newEmail"`
+	NewEmail string `json:"newEmail"`
 }
 
 type ValidateUpdateEmail struct {
@@ -45,7 +45,6 @@ type RevokeUpdateEmail struct {
 }
 
 type UpdatePassword struct {
-	AccountUUID string `json:"accountUUID"`
 	OldPassword string `json:"oldPassword"`
 	NewPassword string `json:"newPassword"`
 }
@@ -55,6 +54,7 @@ type ForgotPassword struct {
 }
 
 type ResetPassword struct {
+	AccountUUID string `json:"accountUUID"`
 	Token       string `json:"token"`
 	NewPassword string `json:"<PASSWORD>"`
 }

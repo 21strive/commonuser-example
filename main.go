@@ -2,12 +2,32 @@ package main
 
 import (
 	"github.com/21strive/commonuser"
+	"github.com/21strive/commonuser/config"
 	"github.com/gofiber/fiber/v2"
 	_ "github.com/lib/pq"
+	"os"
+	"time"
 )
 
+var SystemJWTSecret = "sgfhd0f2-ujfk2ws"
+var SystemJWTIssuer = "commonuser-api.com"
+var SystemJWTLifespan = 24 * 14 * time.Hour // 14 days
+
 func main() {
-	commonuser := commonuser.New()
+	writeDB := CreatePostgresConnection(
+		os.Getenv("DB_WRITE_HOST"), os.Getenv("DB_WRITE_PORT"), os.Getenv("DB_WRITE_USER"),
+		os.Getenv("DB_WRITE_PASSWORD"), os.Getenv("DB_WRITE_NAME"), os.Getenv("DB_WRITE_SSLMODE"))
+	defer writeDB.Close()
+	readDB := CreatePostgresConnection(
+		os.Getenv("DB_READ_HOST"), os.Getenv("DB_READ_PORT"), os.Getenv("DB_READ_USER"),
+		os.Getenv("DB_READ_PASSWORD"), os.Getenv("DB_READ_NAME"), os.Getenv("DB_READ_SSLMODE"))
+	defer readDB.Close()
+	redis := ConnectRedis(os.Getenv("REDIS_HOST"), os.Getenv("REDIS_USER"),
+		os.Getenv("REDIS_PASS"), false)
+
+	config := config.DefaultConfig("account", SystemJWTSecret, SystemJWTIssuer, SystemJWTLifespan)
+
+	commonuser := commonuser.New(readDB, redis, config)
 	httpHandler := NewHTTPHandler(commonuser)
 
 	app := fiber.New()
@@ -25,9 +45,6 @@ func main() {
 	app.Post("/password/update", httpHandler.UpdatePassword)
 	app.Post("/password/forgot", httpHandler.ForgotPassword)
 	app.Post("/password/reset", httpHandler.ResetPassword)
-
-	// Getter
-	app.Get("/user", httpHandler.GetUser)
 
 	err := app.Listen(":3000")
 	if err != nil {

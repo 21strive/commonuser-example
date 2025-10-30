@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/21strive/commonuser/account"
+	"github.com/21strive/commonuser/jwt"
 	"github.com/21strive/item"
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
@@ -19,7 +21,7 @@ import (
 
 var Logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-type ErrorResponse struct {
+type ServiceError struct {
 	Code string `json:"code"`
 	ID   string `json:"id"`
 }
@@ -81,10 +83,10 @@ func ConnectRedis(host string, username string, password string, isClustered boo
 	return client
 }
 
-func ReturnErrorResponse(c *fiber.Ctx, status int, error error, appCode string, source ...string) error {
+func ErrorResponse(c *fiber.Ctx, status int, error error, appCode string, source ...string) error {
 	errorId := item.RandId()
 
-	response := ErrorResponse{
+	response := ServiceError{
 		Code: appCode,
 		ID:   errorId,
 	}
@@ -121,4 +123,34 @@ func ReturnErrorResponse(c *fiber.Ctx, status int, error error, appCode string, 
 
 	c.Set("Content-Type", "application/json")
 	return c.Status(status).JSON(response)
+}
+
+func MiddlewareTokenAuth(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return ErrorResponse(c, fiber.StatusUnauthorized, errors.New("authorization header required"), "E1006", "MiddlewareTokenAuth.MissingHeader")
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return ErrorResponse(c, fiber.StatusUnauthorized, errors.New("bearer token required"), "E1006", "MiddlewareTokenAuth.InvalidFormat")
+	}
+
+	jwtHandler := jwt.NewJWTHandler(SystemJWTSecret, SystemJWTIssuer, int(SystemJWTLifespan))
+	userClaims, err := jwtHandler.ParseAccessToken(tokenString)
+	if err != nil {
+		return ErrorResponse(c, fiber.StatusUnauthorized, err, "E1006", "MiddlewareTokenAuth.ParseToken")
+	}
+
+	account := account.New()
+	account.UUID = userClaims.UUID
+	account.RandId = userClaims.RandId
+	account.Base.Name = userClaims.Name
+	account.Base.Username = userClaims.Username
+	account.Base.Email = userClaims.Email
+	account.Base.Avatar = userClaims.Avatar
+
+	c.Locals("account", account)
+	c.Locals("sessionid", userClaims.SessionID)
+	return c.Next()
 }
