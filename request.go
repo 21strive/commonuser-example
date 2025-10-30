@@ -8,6 +8,7 @@ type NativeRegister struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	Avatar   string `json:"avatar"`
+	commonuser.DeviceInfo
 }
 type VerifyRegistration struct {
 	VerificationCode string `json:"verificationCode"`

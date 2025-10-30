@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"github.com/21strive/commonuser"
 	"github.com/21strive/commonuser/account"
+	"github.com/21strive/commonuser/session"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -28,6 +29,24 @@ func (h *HTTPHandler) Registration(c *fiber.Ctx) error {
 	newAccount.Name = requestBody.Name
 	newAccount.Username = requestBody.Username
 	newAccount.Email = requestBody.Email
+	newAccount.Password = requestBody.Password
+	newAccount.Avatar = requestBody.Avatar
+
+	newSession := session.NewSession()
+	newSession.SetDeviceId(requestBody.DeviceId)
+	newSession.SetDeviceInfo(requestBody.DeviceType)
+	newSession.SetUserAgent(requestBody.UserAgent)
+	newSession.GenerateRefreshToken()
+
+	accessToken, errGen := newAccount.GenerateAccessToken(
+		h.commonuser.Config().JWTSecret,
+		h.commonuser.Config().JWTIssuer,
+		h.commonuser.Config().JWTLifespan,
+		newSession.GetRandId(),
+	)
+	if errGen != nil {
+		return errGen
+	}
 
 	verification, regError := h.commonuser.Register(tx, newAccount, true)
 	if regError != nil {
@@ -39,7 +58,21 @@ func (h *HTTPHandler) Registration(c *fiber.Ctx) error {
 		return errCommit
 	}
 
-	return c.JSON(map[string]string{"verificationCode": verification.Code})
+	response := map[string]string{
+		"accesToken": accessToken,
+	}
+	if verification != nil {
+		response["verificationCode"] = *verification
+	}
+
+	c.Cookie(&fiber.Cookie{
+		Name:     "refreshToken",
+		Value:    newSession.RefreshToken,
+		HTTPOnly: true,
+		Secure:   true,
+		SameSite: "Strict",
+	})
+	return c.JSON(response)
 }
 
 func (h *HTTPHandler) VerifyRegistration(c *fiber.Ctx) error {
@@ -62,6 +95,11 @@ func (h *HTTPHandler) VerifyRegistration(c *fiber.Ctx) error {
 	}
 	if !isValid {
 		return ErrorResponse(c, fiber.StatusBadRequest, nil, "unauthorized")
+	}
+
+	errCommit := tx.Commit()
+	if errCommit != nil {
+		return ErrorResponse(c, fiber.StatusInternalServerError, errCommit, "internal-server-error")
 	}
 
 	return c.SendStatus(fiber.StatusOK)
@@ -189,6 +227,7 @@ func (h *HTTPHandler) UpdateAccount(c *fiber.Ctx) error {
 }
 
 func (h *HTTPHandler) Refresh(c *fiber.Ctx) error {
+	//account := c.Locals("account").(*account.Account)
 	refreshToken := c.Cookies("refreshToken")
 	if refreshToken == "" {
 		return ErrorResponse(c, fiber.StatusUnauthorized, nil, "missing-refresh-token")
@@ -198,6 +237,7 @@ func (h *HTTPHandler) Refresh(c *fiber.Ctx) error {
 	if errInitTx != nil {
 		return errInitTx
 	}
+
 	defer tx.Rollback()
 
 	// For refresh, we need to find the account first, but the method signature suggests
@@ -437,8 +477,9 @@ func (h *HTTPHandler) ResetPassword(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusOK)
 }
 
-func NewHTTPHandler(commonuser *commonuser.Service) *HTTPHandler {
+func NewHTTPHandler(commonuser *commonuser.Service, writeDB *sql.DB) *HTTPHandler {
 	return &HTTPHandler{
 		commonuser: commonuser,
+		writeDB:    writeDB,
 	}
 }

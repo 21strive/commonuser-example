@@ -28,21 +28,21 @@ func main() {
 	config := config.DefaultConfig("account", SystemJWTSecret, SystemJWTIssuer, SystemJWTLifespan)
 
 	commonuser := commonuser.New(readDB, redis, config)
-	httpHandler := NewHTTPHandler(commonuser)
+	httpHandler := NewHTTPHandler(commonuser, writeDB)
 
 	app := fiber.New()
 
 	app.Post("/register", httpHandler.Registration)
-	app.Post("/register/verify", httpHandler.VerifyRegistration)
+	app.Post("/register/verify", MiddlewareTokenAuth, httpHandler.VerifyRegistration)
 	app.Post("/auth/username", httpHandler.AuthWithUsername)
 	app.Post("/auth/email", httpHandler.AuthWithEmail)
-	app.Patch("/account", httpHandler.UpdateAccount)
+	app.Patch("/account", MiddlewareTokenAuth, httpHandler.UpdateAccount)
 	app.Patch("/refresh", httpHandler.Refresh)
-	app.Post("/email/update", httpHandler.UpdateEmail)
+	app.Post("/email/update", MiddlewareTokenAuth, httpHandler.UpdateEmail)
 	app.Post("/email/update/validate", httpHandler.ValidateEmailUpdate)
-	app.Post("/email/update/resend", httpHandler.ResendEmailUpdate)
+	app.Post("/email/update/resend", MiddlewareTokenAuth, httpHandler.ResendEmailUpdate)
 	app.Post("/email/update/revoke", httpHandler.RevokeEmailUpdate)
-	app.Post("/password/update", httpHandler.UpdatePassword)
+	app.Post("/password/update", MiddlewareTokenAuth, httpHandler.UpdatePassword)
 	app.Post("/password/forgot", httpHandler.ForgotPassword)
 	app.Post("/password/reset", httpHandler.ResetPassword)
 
