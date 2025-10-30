@@ -34,6 +34,7 @@ func (h *HTTPHandler) Registration(c *fiber.Ctx) error {
 	newAccount.SetAvatar(requestBody.Avatar)
 
 	newSession := session.NewSession()
+	newSession.SetAccountUUID(newAccount.GetUUID())
 	newSession.SetDeviceId(requestBody.DeviceId)
 	newSession.SetDeviceType(requestBody.DeviceType)
 	newSession.SetUserAgent(requestBody.UserAgent)
@@ -84,6 +85,7 @@ func (h *HTTPHandler) Registration(c *fiber.Ctx) error {
 
 func (h *HTTPHandler) VerifyRegistration(c *fiber.Ctx) error {
 	account := c.Locals("account").(*account.Account)
+	sessionId := c.Locals("sessionid").(string)
 
 	var requestBody VerifyRegistration
 	if err := c.BodyParser(&requestBody); err != nil {
@@ -96,7 +98,7 @@ func (h *HTTPHandler) VerifyRegistration(c *fiber.Ctx) error {
 	}
 	defer tx.Rollback()
 
-	isValid, errVerify := h.commonuser.Verification().Verify(tx, account.GetUUID(), requestBody.VerificationCode)
+	accountFromDB, isValid, errVerify := h.commonuser.Verification().Verify(tx, account.GetUUID(), requestBody.VerificationCode)
 	if errVerify != nil {
 		return errVerify
 	}
@@ -104,12 +106,22 @@ func (h *HTTPHandler) VerifyRegistration(c *fiber.Ctx) error {
 		return ErrorResponse(c, fiber.StatusBadRequest, nil, "unauthorized")
 	}
 
+	newAccessToken, errGen := accountFromDB.GenerateAccessToken(
+		h.commonuser.Config().JWTSecret,
+		h.commonuser.Config().JWTIssuer,
+		h.commonuser.Config().JWTLifespan,
+		sessionId,
+	)
+	if errGen != nil {
+		return errGen
+	}
+
 	errCommit := tx.Commit()
 	if errCommit != nil {
 		return ErrorResponse(c, fiber.StatusInternalServerError, errCommit, "internal-server-error")
 	}
 
-	return c.SendStatus(fiber.StatusOK)
+	return c.JSON(map[string]string{"accessToken": newAccessToken})
 }
 
 func (h *HTTPHandler) AuthWithEmail(c *fiber.Ctx) error {
