@@ -6,6 +6,7 @@ import (
 	"github.com/21strive/commonuser/account"
 	"github.com/21strive/commonuser/session"
 	"github.com/gofiber/fiber/v2"
+	"time"
 )
 
 type HTTPHandler struct {
@@ -26,16 +27,17 @@ func (h *HTTPHandler) Registration(c *fiber.Ctx) error {
 	defer tx.Rollback()
 
 	newAccount := account.New()
-	newAccount.Name = requestBody.Name
-	newAccount.Username = requestBody.Username
-	newAccount.Email = requestBody.Email
-	newAccount.Password = requestBody.Password
-	newAccount.Avatar = requestBody.Avatar
+	newAccount.SetName(requestBody.Name)
+	newAccount.SetUsername(requestBody.Username)
+	newAccount.SetEmail(requestBody.Email)
+	newAccount.SetPassword(requestBody.Password)
+	newAccount.SetAvatar(requestBody.Avatar)
 
 	newSession := session.NewSession()
 	newSession.SetDeviceId(requestBody.DeviceId)
-	newSession.SetDeviceInfo(requestBody.DeviceType)
+	newSession.SetDeviceType(requestBody.DeviceType)
 	newSession.SetUserAgent(requestBody.UserAgent)
+	newSession.SetLastActiveAt(time.Now())
 	newSession.GenerateRefreshToken()
 
 	accessToken, errGen := newAccount.GenerateAccessToken(
@@ -50,16 +52,21 @@ func (h *HTTPHandler) Registration(c *fiber.Ctx) error {
 
 	verification, regError := h.commonuser.Register(tx, newAccount, true)
 	if regError != nil {
-		return regError
+		return ErrorResponse(c, fiber.StatusInternalServerError, regError, "internal-server-error")
+	}
+
+	errorCreateSession := h.commonuser.Session().Create(tx, newSession)
+	if errorCreateSession != nil {
+		return ErrorResponse(c, fiber.StatusInternalServerError, errorCreateSession, "internal-server-error")
 	}
 
 	errCommit := tx.Commit()
 	if errCommit != nil {
-		return errCommit
+		return ErrorResponse(c, fiber.StatusInternalServerError, errCommit, "internal-server-error")
 	}
 
 	response := map[string]string{
-		"accesToken": accessToken,
+		"accessToken": accessToken,
 	}
 	if verification != nil {
 		response["verificationCode"] = *verification
@@ -123,7 +130,7 @@ func (h *HTTPHandler) AuthWithEmail(c *fiber.Ctx) error {
 		UserAgent:  requestBody.UserAgent,
 	}
 
-	accessToken, refreshToken, errToken := h.commonuser.AuthenticateByEmail(
+	accessToken, refreshToken, errToken := h.commonuser.Authenticate().ByEmail(
 		tx,
 		requestBody.Email,
 		requestBody.Password,
@@ -167,7 +174,7 @@ func (h *HTTPHandler) AuthWithUsername(c *fiber.Ctx) error {
 		UserAgent:  requestBody.UserAgent,
 	}
 
-	accessToken, refreshToken, errToken := h.commonuser.AuthenticateByUsername(
+	accessToken, refreshToken, errToken := h.commonuser.Authenticate().ByUsername(
 		tx,
 		requestBody.Username,
 		requestBody.Password,
