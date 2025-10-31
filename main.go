@@ -40,7 +40,6 @@ func main() {
 	app.Patch("/refresh", httpHandler.Refresh)
 	app.Post("/email/update", MiddlewareTokenAuth, httpHandler.UpdateEmail)
 	app.Post("/email/update/validate", httpHandler.ValidateEmailUpdate)
-	app.Post("/email/update/resend", MiddlewareTokenAuth, httpHandler.ResendEmailUpdate)
 	app.Post("/email/update/revoke", httpHandler.RevokeEmailUpdate)
 	app.Post("/password/update", MiddlewareTokenAuth, httpHandler.UpdatePassword)
 	app.Post("/password/forgot", httpHandler.ForgotPassword)

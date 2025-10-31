@@ -39,6 +39,7 @@ func (h *HTTPHandler) Registration(c *fiber.Ctx) error {
 	newSession.SetDeviceType(requestBody.DeviceType)
 	newSession.SetUserAgent(requestBody.UserAgent)
 	newSession.SetLastActiveAt(time.Now())
+	newSession.SetLifeSpan(h.commonuser.Config().TokenLifespan)
 	newSession.GenerateRefreshToken()
 
 	accessToken, errGen := newAccount.GenerateAccessToken(
@@ -232,7 +233,7 @@ func (h *HTTPHandler) UpdateAccount(c *fiber.Ctx) error {
 		NewAvatar:   requestBody.Avatar,
 	}
 
-	err := h.commonuser.Update(tx, account.GetUUID(), updateOpt)
+	updatedAccount, err := h.commonuser.Update(tx, account.GetUUID(), updateOpt)
 	if err != nil {
 		return err
 	}
@@ -242,11 +243,21 @@ func (h *HTTPHandler) UpdateAccount(c *fiber.Ctx) error {
 		return errCommit
 	}
 
-	return c.SendStatus(fiber.StatusOK)
+	newAccessToken, errGenerate := updatedAccount.GenerateAccessToken(
+		h.commonuser.Config().JWTSecret,
+		h.commonuser.Config().JWTIssuer,
+		h.commonuser.Config().JWTLifespan,
+		account.GetUUID(),
+	)
+	if errGenerate != nil {
+		return errGenerate
+	}
+
+	return c.JSON(map[string]string{"accessToken": newAccessToken})
 }
 
 func (h *HTTPHandler) Refresh(c *fiber.Ctx) error {
-	//account := c.Locals("account").(*account.Account)
+	account := c.Locals("account").(*account.Account)
 	refreshToken := c.Cookies("refreshToken")
 	if refreshToken == "" {
 		return ErrorResponse(c, fiber.StatusUnauthorized, nil, "missing-refresh-token")
@@ -259,12 +270,19 @@ func (h *HTTPHandler) Refresh(c *fiber.Ctx) error {
 
 	defer tx.Rollback()
 
-	// For refresh, we need to find the account first, but the method signature suggests
-	// we need the account object. This might require additional implementation
-	// depending on how the refresh token is linked to the account in your system
+	newAccessToken, newRefreshToken, errRefresh := h.commonuser.Session().Refresh(tx, account, refreshToken)
+	if errRefresh != nil {
+		return errRefresh
+	}
 
-	// This is a placeholder - you'll need to implement account lookup from refresh token
-	return ErrorResponse(c, fiber.StatusNotImplemented, nil, "not-implemented")
+	c.Cookie(&fiber.Cookie{
+		Name:     "refreshToken",
+		Value:    newRefreshToken,
+		HTTPOnly: true,
+		Secure:   true,
+		SameSite: "Strict",
+	})
+	return c.JSON(map[string]string{"accessToken": newAccessToken})
 }
 
 func (h *HTTPHandler) UpdateEmail(c *fiber.Ctx) error {
@@ -286,7 +304,7 @@ func (h *HTTPHandler) UpdateEmail(c *fiber.Ctx) error {
 		return err
 	}
 
-	updateEmail, err := h.commonuser.EmailUpdate().RequestUpdate(tx, userAccount, requestBody.NewEmail)
+	validateToken, revokeToken, err := h.commonuser.EmailUpdate().RequestUpdate(tx, userAccount, requestBody.NewEmail)
 	if err != nil {
 		return err
 	}
@@ -300,7 +318,7 @@ func (h *HTTPHandler) UpdateEmail(c *fiber.Ctx) error {
 	// for verification. You should implement email delivery (SMTP, service provider, etc.)
 	// to send this token to requestBody.NewEmail. The user must use this token
 	// in the ValidateEmailUpdate endpoint to confirm the email change.
-	return c.JSON(map[string]string{"token": updateEmail.Token})
+	return c.JSON(map[string]string{"token": validateToken, "revokeToken": revokeToken})
 }
 
 func (h *HTTPHandler) ValidateEmailUpdate(c *fiber.Ctx) error {
@@ -315,12 +333,7 @@ func (h *HTTPHandler) ValidateEmailUpdate(c *fiber.Ctx) error {
 	}
 	defer tx.Rollback()
 
-	userAccount, err := h.commonuser.Find().ByUUID(requestBody.AccountUUID)
-	if err != nil {
-		return err
-	}
-
-	err = h.commonuser.EmailUpdate().ValidateUpdate(tx, userAccount, requestBody.Token)
+	err := h.commonuser.EmailUpdate().ValidateUpdate(tx, requestBody.AccountUUID, requestBody.Token)
 	if err != nil {
 		return err
 	}
@@ -331,42 +344,6 @@ func (h *HTTPHandler) ValidateEmailUpdate(c *fiber.Ctx) error {
 	}
 
 	return c.SendStatus(fiber.StatusOK)
-}
-
-func (h *HTTPHandler) ResendEmailUpdate(c *fiber.Ctx) error {
-	account := c.Locals("account").(*account.Account)
-
-	var requestBody UpdateEmail
-	if err := c.BodyParser(&requestBody); err != nil {
-		return ErrorResponse(c, fiber.StatusBadRequest, err, "invalid-request-body")
-	}
-
-	tx, errInitTx := h.writeDB.Begin()
-	if errInitTx != nil {
-		return errInitTx
-	}
-	defer tx.Rollback()
-
-	userAccount, err := h.commonuser.Find().ByUUID(account.GetUUID())
-	if err != nil {
-		return err
-	}
-
-	updateEmail, err := h.commonuser.EmailUpdate().RequestUpdate(tx, userAccount, requestBody.NewEmail)
-	if err != nil {
-		return err
-	}
-
-	errCommit := tx.Commit()
-	if errCommit != nil {
-		return errCommit
-	}
-
-	// NOTE: The returned token should be sent to the user's NEW email address
-	// for verification. You should implement email delivery (SMTP, service provider, etc.)
-	// to send this token to requestBody.NewEmail. The user must use this token
-	// in the ValidateEmailUpdate endpoint to confirm the email change.
-	return c.JSON(map[string]string{"token": updateEmail.Token})
 }
 
 func (h *HTTPHandler) RevokeEmailUpdate(c *fiber.Ctx) error {
@@ -381,14 +358,9 @@ func (h *HTTPHandler) RevokeEmailUpdate(c *fiber.Ctx) error {
 	}
 	defer tx.Rollback()
 
-	userAccount, err := h.commonuser.Find().ByUUID(requestBody.AccountUUID)
+	err := h.commonuser.EmailUpdate().RevokeUpdate(tx, requestBody.AccountUUID, requestBody.RevokeToken)
 	if err != nil {
-		return err
-	}
-
-	err = h.commonuser.EmailUpdate().Delete(tx, userAccount)
-	if err != nil {
-		return err
+		return ErrorResponse(c, fiber.StatusInternalServerError, err, "failed-revoke")
 	}
 
 	errCommit := tx.Commit()
@@ -413,12 +385,7 @@ func (h *HTTPHandler) UpdatePassword(c *fiber.Ctx) error {
 	}
 	defer tx.Rollback()
 
-	userAccount, err := h.commonuser.Find().ByUUID(account.GetUUID())
-	if err != nil {
-		return err
-	}
-
-	err = h.commonuser.Password().Update(tx, userAccount, requestBody.OldPassword, requestBody.NewPassword)
+	err := h.commonuser.Password().Update(tx, account.GetUUID(), requestBody.OldPassword, requestBody.NewPassword)
 	if err != nil {
 		return err
 	}

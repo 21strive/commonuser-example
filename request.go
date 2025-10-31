@@ -43,6 +43,7 @@ type ValidateUpdateEmail struct {
 
 type RevokeUpdateEmail struct {
 	AccountUUID string `json:"accountUUID"`
+	RevokeToken string `json:"revokeToken"`
 }
 
 type UpdatePassword struct {
@@ -57,5 +58,5 @@ type ForgotPassword struct {
 type ResetPassword struct {
 	AccountUUID string `json:"accountUUID"`
 	Token       string `json:"token"`
-	NewPassword string `json:"<PASSWORD>"`
+	NewPassword string `json:"newPassword" binding:"required,min=8,max=255"`
 }
