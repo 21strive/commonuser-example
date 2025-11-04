@@ -27,8 +27,9 @@ func main() {
 
 	config := config.DefaultConfig("account", SystemJWTSecret, SystemJWTIssuer, SystemJWTLifespan)
 
-	commonuser := commonuser.New(readDB, redis, config)
-	httpHandler := NewHTTPHandler(commonuser, writeDB)
+	commonuserService := commonuser.New(readDB, redis, config)
+	commonuserFetchers := commonuser.NewFetchers(redis, config)
+	httpHandler := NewHTTPHandler(commonuserService, commonuserFetchers, writeDB)
 
 	app := fiber.New()
 
@@ -44,6 +45,7 @@ func main() {
 	app.Post("/password/update", MiddlewareTokenAuth, httpHandler.UpdatePassword)
 	app.Post("/password/forgot", httpHandler.ForgotPassword)
 	app.Post("/password/reset", httpHandler.ResetPassword)
+	app.Get("/content", MiddlewareTokenAuth, httpHandler.FetchContent)
 
 	err := app.Listen(":3000")
 	if err != nil {

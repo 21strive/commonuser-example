@@ -10,8 +10,9 @@ import (
 )
 
 type HTTPHandler struct {
-	writeDB    *sql.DB
-	commonuser *commonuser.Service
+	writeDB           *sql.DB
+	commonuser        *commonuser.Service
+	commonuserFetcher *commonuser.Fetchers
 }
 
 func (h *HTTPHandler) Registration(c *fiber.Ctx) error {
@@ -143,7 +144,7 @@ func (h *HTTPHandler) AuthWithEmail(c *fiber.Ctx) error {
 		UserAgent:  requestBody.UserAgent,
 	}
 
-	accessToken, refreshToken, errToken := h.commonuser.Authenticate().ByEmail(
+	accessToken, refreshToken, errToken := h.commonuser.NativeAuthenticate().ByEmail(
 		tx,
 		requestBody.Email,
 		requestBody.Password,
@@ -187,7 +188,7 @@ func (h *HTTPHandler) AuthWithUsername(c *fiber.Ctx) error {
 		UserAgent:  requestBody.UserAgent,
 	}
 
-	accessToken, refreshToken, errToken := h.commonuser.Authenticate().ByUsername(
+	accessToken, refreshToken, errToken := h.commonuser.NativeAuthenticate().ByUsername(
 		tx,
 		requestBody.Username,
 		requestBody.Password,
@@ -304,7 +305,7 @@ func (h *HTTPHandler) UpdateEmail(c *fiber.Ctx) error {
 		return err
 	}
 
-	validateToken, revokeToken, err := h.commonuser.EmailUpdate().RequestUpdate(tx, userAccount, requestBody.NewEmail)
+	updateEmail, err := h.commonuser.EmailUpdate().RequestUpdate(tx, userAccount, requestBody.NewEmail)
 	if err != nil {
 		return err
 	}
@@ -318,7 +319,7 @@ func (h *HTTPHandler) UpdateEmail(c *fiber.Ctx) error {
 	// for verification. You should implement email delivery (SMTP, service provider, etc.)
 	// to send this token to requestBody.NewEmail. The user must use this token
 	// in the ValidateEmailUpdate endpoint to confirm the email change.
-	return c.JSON(map[string]string{"token": validateToken, "revokeToken": revokeToken})
+	return c.JSON(map[string]string{"token": updateEmail.Token, "revokeToken": updateEmail.RevokeToken})
 }
 
 func (h *HTTPHandler) ValidateEmailUpdate(c *fiber.Ctx) error {
@@ -341,6 +342,11 @@ func (h *HTTPHandler) ValidateEmailUpdate(c *fiber.Ctx) error {
 	errCommit := tx.Commit()
 	if errCommit != nil {
 		return errCommit
+	}
+
+	errSeedSessions := h.commonuser.Session().SeedByAccount(requestBody.AccountUUID)
+	if errSeedSessions != nil {
+		return errSeedSessions
 	}
 
 	return c.SendStatus(fiber.StatusOK)
@@ -393,6 +399,11 @@ func (h *HTTPHandler) UpdatePassword(c *fiber.Ctx) error {
 	errCommit := tx.Commit()
 	if errCommit != nil {
 		return errCommit
+	}
+
+	errSeedSessions := h.commonuser.Session().SeedByAccount(account.GetUUID())
+	if errSeedSessions != nil {
+		return errSeedSessions
 	}
 
 	return c.SendStatus(fiber.StatusOK)
@@ -460,12 +471,32 @@ func (h *HTTPHandler) ResetPassword(c *fiber.Ctx) error {
 		return errCommit
 	}
 
+	errSeedSessions := h.commonuser.Session().SeedByAccount(userAccount.GetUUID())
+	if errSeedSessions != nil {
+		return errSeedSessions
+	}
+
 	return c.SendStatus(fiber.StatusOK)
 }
 
-func NewHTTPHandler(commonuser *commonuser.Service, writeDB *sql.DB) *HTTPHandler {
+func (h *HTTPHandler) FetchContent(c *fiber.Ctx) error {
+	account := c.Locals("account").(*account.Account)
+	sessionId := c.Locals("sessionid").(string)
+
+	// check session validity from cache
+	_, errCheckSession := h.commonuserFetcher.PingSession(sessionId)
+	if errCheckSession != nil {
+		return c.SendStatus(fiber.StatusUnauthorized)
+	}
+
+	content := "Hi " + account.Name + ". If you can see this, you are authenticated."
+	return c.SendString(content)
+}
+
+func NewHTTPHandler(commonuser *commonuser.Service, commonuserFetchers *commonuser.Fetchers, writeDB *sql.DB) *HTTPHandler {
 	return &HTTPHandler{
-		commonuser: commonuser,
-		writeDB:    writeDB,
+		commonuser:        commonuser,
+		commonuserFetcher: commonuserFetchers,
+		writeDB:           writeDB,
 	}
 }
