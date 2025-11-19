@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"github.com/21strive/commonuser"
 	"github.com/21strive/commonuser/account"
+	"github.com/21strive/commonuser/provider"
 	"github.com/21strive/commonuser/session"
 	"github.com/gofiber/fiber/v2"
 	"time"
@@ -100,22 +102,9 @@ func (h *HTTPHandler) VerifyRegistration(c *fiber.Ctx) error {
 	}
 	defer tx.Rollback()
 
-	accountFromDB, isValid, errVerify := h.commonuser.Verification().Verify(tx, account.GetUUID(), requestBody.VerificationCode)
+	newAccessToken, errVerify := h.commonuser.Verification().Verify(tx, account.GetUUID(), requestBody.VerificationCode, sessionId)
 	if errVerify != nil {
-		return errVerify
-	}
-	if !isValid {
-		return ErrorResponse(c, fiber.StatusBadRequest, nil, "unauthorized")
-	}
-
-	newAccessToken, errGen := accountFromDB.GenerateAccessToken(
-		h.commonuser.Config().JWTSecret,
-		h.commonuser.Config().JWTIssuer,
-		h.commonuser.Config().JWTLifespan,
-		sessionId,
-	)
-	if errGen != nil {
-		return errGen
+		return ErrorResponse(c, fiber.StatusUnauthorized, errVerify, "invalid-verification-code")
 	}
 
 	errCommit := tx.Commit()
@@ -132,31 +121,20 @@ func (h *HTTPHandler) AuthWithEmail(c *fiber.Ctx) error {
 		return ErrorResponse(c, fiber.StatusBadRequest, err, "invalid-request-body")
 	}
 
-	tx, errInitTx := h.writeDB.Begin()
-	if errInitTx != nil {
-		return errInitTx
-	}
-	defer tx.Rollback()
-
 	deviceInfo := commonuser.DeviceInfo{
 		DeviceId:   requestBody.DeviceId,
 		DeviceType: requestBody.DeviceType,
 		UserAgent:  requestBody.UserAgent,
 	}
 
-	accessToken, refreshToken, errToken := h.commonuser.NativeAuthenticate().ByEmail(
-		tx,
+	accessToken, refreshToken, errToken := h.commonuser.Authenticate().ByEmail(
+		h.writeDB,
 		requestBody.Email,
 		requestBody.Password,
 		deviceInfo,
 	)
 	if errToken != nil {
 		return errToken
-	}
-
-	errCommit := tx.Commit()
-	if errCommit != nil {
-		return errCommit
 	}
 
 	c.Cookie(&fiber.Cookie{
@@ -176,31 +154,20 @@ func (h *HTTPHandler) AuthWithUsername(c *fiber.Ctx) error {
 		return ErrorResponse(c, fiber.StatusBadRequest, err, "invalid-request-body")
 	}
 
-	tx, errInitTx := h.writeDB.Begin()
-	if errInitTx != nil {
-		return errInitTx
-	}
-	defer tx.Rollback()
-
 	deviceInfo := commonuser.DeviceInfo{
 		DeviceId:   requestBody.DeviceId,
 		DeviceType: requestBody.DeviceType,
 		UserAgent:  requestBody.UserAgent,
 	}
 
-	accessToken, refreshToken, errToken := h.commonuser.NativeAuthenticate().ByUsername(
-		tx,
+	accessToken, refreshToken, errToken := h.commonuser.Authenticate().ByUsername(
+		h.writeDB,
 		requestBody.Username,
 		requestBody.Password,
 		deviceInfo,
 	)
 	if errToken != nil {
 		return errToken
-	}
-
-	errCommit := tx.Commit()
-	if errCommit != nil {
-		return errCommit
 	}
 
 	c.Cookie(&fiber.Cookie{
@@ -210,7 +177,61 @@ func (h *HTTPHandler) AuthWithUsername(c *fiber.Ctx) error {
 		Secure:   true,
 		SameSite: "Strict",
 	})
+	return c.JSON(map[string]string{"accessToken": accessToken})
+}
 
+func (h *HTTPHandler) AuthWithGoogle(c *fiber.Ctx) error {
+	var requestBody AuthWithGoogle
+	if err := c.BodyParser(&requestBody); err != nil {
+		return ErrorResponse(c, fiber.StatusBadRequest, err, "invalid-request-body")
+	}
+
+	deviceInfo := commonuser.DeviceInfo{
+		DeviceId:   requestBody.DeviceId,
+		DeviceType: requestBody.DeviceType,
+		UserAgent:  requestBody.UserAgent,
+	}
+
+	var accessToken string
+	var refreshToken string
+	accessToken, refreshToken, errAuth := h.commonuser.Authenticate().ByProvider(h.writeDB, "google", requestBody.Sub, deviceInfo)
+	if errAuth != nil {
+		if errors.Is(errAuth, provider.ProviderNotFound) {
+			newAccount := account.New()
+			newAccount.SetName(requestBody.Name)
+			newAccount.SetEmail(requestBody.Email)
+
+			newProvider := provider.New()
+			newProvider.SetIssuer("google")
+			newProvider.SetEmail(requestBody.Email)
+			newProvider.SetName(requestBody.Name)
+			newProvider.SetSub(requestBody.Sub)
+			newProvider.SetAccount(newAccount)
+
+			errRegister := h.commonuser.RegisterWithProvider(h.writeDB, newAccount, newProvider)
+			if errRegister != nil {
+				return ErrorResponse(c, fiber.StatusInternalServerError, errRegister, "internal-server-error")
+			}
+
+			// NOTE: This section might be part of a database transaction. If that happens,
+			// the transaction must be committed before the re-authenticate section runs.
+			var errReAuth error
+			accessToken, refreshToken, errReAuth = h.commonuser.Authenticate().ByProvider(h.writeDB, "google", requestBody.Sub, deviceInfo)
+			if errReAuth != nil {
+				return ErrorResponse(c, fiber.StatusInternalServerError, errReAuth, "internal-server-error")
+			}
+		} else {
+			return ErrorResponse(c, fiber.StatusInternalServerError, errAuth, "internal-server-error")
+		}
+	}
+
+	c.Cookie(&fiber.Cookie{
+		Name:     "refreshToken",
+		Value:    refreshToken,
+		HTTPOnly: true,
+		Secure:   true,
+		SameSite: "Strict",
+	})
 	return c.JSON(map[string]string{"accessToken": accessToken})
 }
 
@@ -344,7 +365,16 @@ func (h *HTTPHandler) ValidateEmailUpdate(c *fiber.Ctx) error {
 		return errCommit
 	}
 
-	errSeedSessions := h.commonuser.Session().SeedByAccount(requestBody.AccountUUID)
+	accountFromDB, errFind := h.commonuser.Find().ByUUID(requestBody.AccountUUID)
+	if errFind != nil {
+		if errors.Is(account.NotFound, errFind) {
+			return c.SendStatus(fiber.StatusNotFound)
+		} else {
+			return ErrorResponse(c, fiber.StatusInternalServerError, errFind, "internal-server-error")
+		}
+	}
+
+	errSeedSessions := h.commonuser.Session().SeedByAccount(accountFromDB)
 	if errSeedSessions != nil {
 		return errSeedSessions
 	}
@@ -401,7 +431,7 @@ func (h *HTTPHandler) UpdatePassword(c *fiber.Ctx) error {
 		return errCommit
 	}
 
-	errSeedSessions := h.commonuser.Session().SeedByAccount(account.GetUUID())
+	errSeedSessions := h.commonuser.Session().SeedByAccount(account)
 	if errSeedSessions != nil {
 		return errSeedSessions
 	}
@@ -471,7 +501,7 @@ func (h *HTTPHandler) ResetPassword(c *fiber.Ctx) error {
 		return errCommit
 	}
 
-	errSeedSessions := h.commonuser.Session().SeedByAccount(userAccount.GetUUID())
+	errSeedSessions := h.commonuser.Session().SeedByAccount(userAccount)
 	if errSeedSessions != nil {
 		return errSeedSessions
 	}
@@ -484,13 +514,42 @@ func (h *HTTPHandler) FetchContent(c *fiber.Ctx) error {
 	sessionId := c.Locals("sessionid").(string)
 
 	// check session validity from cache
-	_, errCheckSession := h.commonuserFetcher.PingSession(sessionId)
+	_, errCheckSession := h.commonuserFetcher.Session().Ping(sessionId)
 	if errCheckSession != nil {
 		return c.SendStatus(fiber.StatusUnauthorized)
 	}
 
 	content := "Hi " + account.Name + ". If you can see this, you are authenticated."
 	return c.SendString(content)
+}
+
+func (h *HTTPHandler) FetchSession(c *fiber.Ctx) error {
+	account := c.Locals("account").(*account.Account)
+
+	sessions, errFetch := h.commonuserFetcher.Session().FetchByAccount(account.GetRandId())
+	if errFetch != nil {
+		if errors.Is(errFetch, session.SeedRequired) {
+			errSeed := h.commonuser.Session().SeedByAccount(account)
+			if errSeed != nil {
+				return errSeed
+			}
+
+			sessions, errFetch = h.commonuserFetcher.Session().FetchByAccount(account.GetRandId())
+		}
+	}
+
+	return c.JSON(sessions)
+}
+
+func (h *HTTPHandler) RevokeSession(c *fiber.Ctx) error {
+	sessionUUID := c.Params("sessionUUID")
+
+	errRevoke := h.commonuser.Session().Revoke(h.writeDB, sessionUUID)
+	if errRevoke != nil {
+		return errRevoke
+	}
+
+	return c.SendStatus(fiber.StatusOK)
 }
 
 func NewHTTPHandler(commonuser *commonuser.Service, commonuserFetchers *commonuser.Fetchers, writeDB *sql.DB) *HTTPHandler {

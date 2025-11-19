@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/21strive/commonuser/account"
-	"github.com/21strive/commonuser/jwt"
+	"github.com/21strive/commonuser/jwt_impl"
 	"github.com/21strive/item"
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
@@ -136,7 +136,7 @@ func MiddlewareTokenAuth(c *fiber.Ctx) error {
 		return ErrorResponse(c, fiber.StatusUnauthorized, errors.New("bearer token required"), "E1006", "MiddlewareTokenAuth.InvalidFormat")
 	}
 
-	jwtHandler := jwt.NewJWTHandler(SystemJWTSecret, SystemJWTIssuer, int(SystemJWTLifespan))
+	jwtHandler := jwt_impl.NewJWTHandler(SystemJWTSecret, SystemJWTIssuer, int(SystemJWTLifespan))
 	userClaims, err := jwtHandler.ParseAccessToken(tokenString)
 	if err != nil {
 		return ErrorResponse(c, fiber.StatusUnauthorized, err, "E1006", "MiddlewareTokenAuth.ParseToken")

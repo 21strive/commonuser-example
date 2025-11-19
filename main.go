@@ -36,6 +36,7 @@ func main() {
 	app.Post("/register", httpHandler.Registration)
 	app.Post("/register/verify", MiddlewareTokenAuth, httpHandler.VerifyRegistration)
 	app.Post("/auth/username", httpHandler.AuthWithUsername)
+	app.Post("/auth/google", httpHandler.AuthWithGoogle)
 	app.Post("/auth/email", httpHandler.AuthWithEmail)
 	app.Patch("/account", MiddlewareTokenAuth, httpHandler.UpdateAccount)
 	app.Patch("/refresh", httpHandler.Refresh)
@@ -45,6 +46,8 @@ func main() {
 	app.Post("/password/update", MiddlewareTokenAuth, httpHandler.UpdatePassword)
 	app.Post("/password/forgot", httpHandler.ForgotPassword)
 	app.Post("/password/reset", httpHandler.ResetPassword)
+	app.Get("/session", MiddlewareTokenAuth, httpHandler.FetchSession)
+	app.Post("/session/revoke/:sessionUUID", MiddlewareTokenAuth, httpHandler.RevokeSession)
 	app.Get("/content", MiddlewareTokenAuth, httpHandler.FetchContent)
 
 	err := app.Listen(":3000")
